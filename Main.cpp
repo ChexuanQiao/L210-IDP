@@ -10,7 +10,6 @@ Adafruit_MotorShield AFMS = Adafruit_MotorShield();
 Adafruit_DCMotor *LeftMotor = AFMS.getMotor(3);
 Adafruit_DCMotor *RightMotor = AFMS.getMotor(4);
 
-
 // Arduino Pins
 const int ButtonPin = 11;
 const int AmberLED = 8;
@@ -64,18 +63,6 @@ int block_placed = 0;
 int block_number = 1;
 int journey = 0; // 0 for go to, 1 for return
 int Turn = 0;
-
-/*
-   Task 0: Starting move forward
-   Task 1: Line follow
-   Task 2: Search turn
-   Task 3: Approach
-   Task 4: Pick up
-   Task 5: Retreat
-   Task 6: (180+search_turn) turn
-   // Task 7: Search turn reverse;
-*/
-
 
 // Tunable Parameters.
 const float kp = 30; // Proportional gain.
