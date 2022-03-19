@@ -4,7 +4,6 @@
 #include <ArduinoQueue.h>
 #include <Servo.h>
 
-// const int A2 = A2;
 
 const int chassis_high = 25;
 const int chassis_low = 48;
