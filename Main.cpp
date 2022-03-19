@@ -1,31 +1,16 @@
 #include <Wire.h>
+#include <Arduino.h>
 #include <Adafruit_MotorShield.h>
 #include "utility/Adafruit_MS_PWMServoDriver.h"
 #include <ArduinoQueue.h>
 #include <Servo.h>
 
+Adafruit_MotorShield AFMS = Adafruit_MotorShield();
+// Motor shield motor pins.
+Adafruit_DCMotor *LeftMotor = AFMS.getMotor(3);
+Adafruit_DCMotor *RightMotor = AFMS.getMotor(4);
 
-const int chassis_high = 25;
-const int chassis_low = 48;
-const int clamp_open = 65;
-const int clamp_closed = 105;
 
-const int clamp_servo_pin = 10; //Servo 1 on the outside;
-const int chassis_servo_pin = 9; // Servo 2 on the inside;
-
-int far_blue_target = 0;
-int close_blue_target = 0;
-int far_red_target = 0;
-int close_red_target = 0;
-
-int delivering_far = 0;
-int delivering_close = 0;
-
-// Remains to be solved.
-int current_left_intxn;
-int current_right_intxn;
-
-const int delivery_lf_period = 1950;
 // Arduino Pins
 const int ButtonPin = 11;
 const int AmberLED = 8;
@@ -39,31 +24,37 @@ const int L1LF_receive = 5;// = 11;
 const int R1LF_receive = 7;// = 10;
 const int R2LF_receive = 4;// = 8;
 
+const int clamp_servo_pin = 10; //Servo 1 on the outside;
+const int chassis_servo_pin = 9; // Servo 2 on the inside;
 // ------------------------------
 
-int line_find_turn_delay = 0;
-int approach_time; // calculated time to approach and retreat from block.
-int Turn = 0;
+Servo clamp_servo;  // create servo object to control a servo
+Servo chassis_servo;
 
-int buttonState = 0;
-int button_pressed = 0;
+// tuned servo positions.
+const int chassis_high = 25;
+const int chassis_low = 48;
+const int clamp_open = 65;
+const int clamp_closed = 105;
 
-float color_baseline = 0;
+// identifiers to record which of the targets are occupied.
+int far_blue_target = 0;
+int close_blue_target = 0;
+int far_red_target = 0;
+int close_red_target = 0;
+
+// identifiers to record to which target we are delivering to.
+int delivering_far = 0;
+int delivering_close = 0;
 
 // Line deviate failsafe
 int stray_left;
 const int stray_threshold = 6;
 
-Adafruit_MotorShield AFMS = Adafruit_MotorShield();
-// Motor shield motor pins.
-Adafruit_DCMotor *LeftMotor = AFMS.getMotor(3);
-Adafruit_DCMotor *RightMotor = AFMS.getMotor(4);
-Servo clamp_servo;  // create servo object to control a servo
-Servo chassis_servo;
-
 // TASK MANAGER
+int buttonState = 0;
+int button_pressed = 0;
 int task = 0;
-
 int block_found = 0;
 int block_approached = 0;
 int block_color = 0; // 0 for blue, 1 for red.
@@ -72,6 +63,7 @@ int retreated_with_block = 0;
 int block_placed = 0;
 int block_number = 1;
 int journey = 0; // 0 for go to, 1 for return
+int Turn = 0;
 
 /*
    Task 0: Starting move forward
@@ -130,7 +122,7 @@ int prev_speedR;
 
 unsigned long main_loop_counter = 0;
 unsigned long current_time = 0;
-unsigned long PID_prev_time = 0; // For Pi, no use actually.
+unsigned long PID_prev_time = 0; 
 unsigned long prev_blink_time = 0;
 
 // record intersections encountered.
@@ -148,8 +140,15 @@ int R2LF_data;
 ArduinoQueue<int> L2Queue = ArduinoQueue<int>(intxn_queue_length);
 ArduinoQueue<int> R2Queue = ArduinoQueue<int>(intxn_queue_length);
 
-// DistanceIR params.
+int current_left_intxn;
+int current_right_intxn;
 
+const int delivery_lf_period = 1950;
+int approach_time; // calculated time to approach and retreat from block.
+int line_find_turn_delay = 0;
+float color_baseline = 0;
+
+// DistanceIR params.
 float sensorVal = 0;
 float sensorVolt = 0;
 float Vr = 5.0;
@@ -164,7 +163,6 @@ void BlinkRed(){
     delay(10);
     digitalWrite(RedLED, HIGH);
 }
-
 void BlinkGreen(){
     digitalWrite(GreenLED, LOW);
     delay(10);
@@ -186,26 +184,19 @@ public:
 void LFDetection::ColorBaseline(){
     int counter = 10;
     for (int i = 0 ; i < counter ; i++){
-        // read the input on analog pin 0:
         int sensorValue = analogRead(A0);
         int sensorValue2 = analogRead(A1);
         // Convert the analog reading (which goes from 0 - 1023) to a voltage (0 - 5V):
         float voltage = sensorValue * (5.0 / 1023.0);
         float voltage2 = sensorValue2 * (5.0 / 1023.0);
         float difference = voltage - voltage2;
-        // print out the value you read:
-        /*
-        Serial.println("Finding baseline difference: -----");
-        Serial.println("V1: " + String(voltage));
-        Serial.println("V2:" + String(voltage2));
-        Serial.println("Difference: " + String(difference));
-        Serial.println("_____________");
-        */
+        /* set baseline difference as an average of ten values, recorded before 
+        the actual color sensing. */
         color_baseline += difference / counter;
     }
     Serial.println("");
     Serial.println("Color Baseline: " + String(color_baseline));
-
+    
     digitalWrite(GreenLED, LOW);
     delay(100);
     digitalWrite(GreenLED, HIGH);
@@ -229,29 +220,8 @@ void LFDetection::Color(){
     Serial.println("V1: " + String(voltage));
     Serial.println("V2:" + String(voltage2));
     Serial.println("difference: " + String(difference));
-    /*
-    if (difference < 0.5){
-      digitalWrite(GreenLED, HIGH);
-      digitalWrite(RedLED, HIGH);
-      Turn = 1; // Testing, to be deleted.
-    }
-    */
-    float color_threshold = 1;
 
-    for (int i = 40; i > 0 ; i-= 15){
-        digitalWrite(AmberLED, LOW);
-        delay(10);
-        digitalWrite(AmberLED, HIGH);
-        delay(i);
-        digitalWrite(GreenLED, LOW);
-        delay(10);
-        digitalWrite(GreenLED, HIGH);
-        delay(i);
-        digitalWrite(RedLED, LOW);
-        delay(10);
-        digitalWrite(RedLED, HIGH);
-        delay(i);
-    }
+    float color_threshold = 1;
 
     if (difference - color_baseline < color_threshold) {
       digitalWrite(GreenLED, LOW); // turn Green LED on
@@ -267,7 +237,7 @@ void LFDetection::Color(){
       block_color = 1;
       Turn = 2;
     }
-    delay(2500);
+    delay(5000);
     digitalWrite(GreenLED, HIGH);
     digitalWrite(RedLED, HIGH);
     return;
@@ -300,7 +270,8 @@ void LFDetection::BlockDetection(){
     F.enqueue(mid_front);
     Q.enqueue(back_front);
     B.enqueue(DS_data);
-
+    
+    // Track the moving average of the frontqueue and backqueue
     front_avg -= front_front / front_queue_length;
     front_avg += mid_front / front_queue_length;
     back_avg -= back_front / back_queue_length;
@@ -308,6 +279,7 @@ void LFDetection::BlockDetection(){
 
     Serial.println("Front Back Average: " + String(front_avg) + "  " + String(back_avg));
 
+    // Check for a significant drop in distance between front and back queue.
     if (front_avg - back_avg > dip_threshold){
       block_distance = DS_data;
       Serial.println(" ");
@@ -368,7 +340,7 @@ void LFDetection::EdgeDetection(){
         L2Queue.enqueue(L2enqueued);
     }
     else{
-        L2Queue.enqueue(L2LF_data); // to be changed to L2
+        L2Queue.enqueue(L2LF_data); 
         L2enqueued = L2LF_data;
     }
     if (r_intxn_deb == 0){ // Debounce not finished.
@@ -376,7 +348,7 @@ void LFDetection::EdgeDetection(){
         R2Queue.enqueue(R2enqueued);
     }
     else{
-        R2Queue.enqueue(R2LF_data); // to be changed to R2
+        R2Queue.enqueue(R2LF_data); 
         R2enqueued = R2LF_data;
     }
 
@@ -396,12 +368,6 @@ void LFDetection::EdgeDetection(){
         right_white_counter--;
         // Serial.println("R1 DEqueued 1");
     }
-    /*
-    if (main_loop_counter % 10 == 0){
-        Serial.println("left_White_Counter: " + String(left_white_counter));
-        Serial.println("right_White_Counter: " + String(right_white_counter));
-    }
-    */
 }
 
 void LFDetection::IntersectionDetection(){
@@ -456,44 +422,24 @@ class ServoMove{
 public:
     void Pickup();
     void Place();
-    void foo();
-    void bar();
     int pos;
 };
-void ServoMove::foo(){
-    int potpin = 0;  // analog pin used to connect the potentiometer
-    int val;    // variable to read the value from the analog pin
-    val = analogRead(potpin);            // reads the value of the potentiometer (value between 0 and 1023)
-    val = map(val, 0, 1023, 0, 180);     // scale it to use it with the servo (value between 0 and 180)
-    clamp_servo.write(val);                  // sets the servo position according to the scaled value
-    delay(15);                           // waits for the servo to get there
-}
-void ServoMove::bar(){
-    for (pos = 0; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees
-        // in steps of 1 degree
-        clamp_servo.write(pos);              // tell servo to go to position in variable 'pos'
-        delay(15);                       // waits 15ms for the servo to reach the position
-    }
-    for (pos = 180; pos >= 0; pos -= 1) { // goes from 180 degrees to 0 degrees
-        clamp_servo.write(pos);              // tell servo to go to position in variable 'pos'
-        delay(15);                       // waits 15ms for the servo to reach the position
-    }
-}
 void ServoMove::Pickup(){
     delay(200);
+    // Lower grabber.
     for (int i = chassis_high; i < chassis_low; i++){
         chassis_servo.write(i);
         delay(10);
     }
 
     delay(200);
-
+    // Grab the block.
     for (int i = clamp_open; i < clamp_closed; i++ ){
         clamp_servo.write(i);
         delay(10);
     }
     delay(200);
-
+    // Raise the grabber.
     for (int i = chassis_low; i > chassis_high; i--){
         chassis_servo.write(i);
         delay(10);
@@ -821,19 +767,6 @@ void MovementControl::Approach(){
         prev_speedR = 0;
         delay(200);
         Color();
-        /*
-        long adjust = millis();
-        while(millis() - adjust < 50){
-            LeftMotor->run(BACKWARD);
-            RightMotor->run(BACKWARD);
-            LeftMotor->setSpeed(ref_speed);
-            RightMotor->setSpeed(ref_speed);
-        }
-        LeftMotor->setSpeed(0);
-        RightMotor->setSpeed(0);
-        prev_speedL = 0;
-        prev_speedR = 0;
-        */
         return;
     }
 
@@ -845,9 +778,9 @@ void MovementControl::Approach(){
     prev_speedR = speedR;
     ColorBaseline();
 
-    long k = 50000; // to be tuned.
+    // Converts distance sensor reading to time needed to approach the block.
+    long k = 80000; 
     approach_time = k * (block_distance / ref_speed);
-    //approach_time = 2000; // for testing, to be deleted.
     Serial.println("Stopping to start approaching: " + String(approach_time));
     delay(2000);
     long approach_start_time = millis();
@@ -894,12 +827,10 @@ void MovementControl::LineFindTurn(){
       digitalWrite(GreenLED, HIGH);
       delay(10);
       LeftMotor->run(BACKWARD);
-      //LeftMotor->run(FORWARD);
       LeftMotor->setSpeed(turn_speed);
       RightMotor->run(FORWARD);
-      // RightMotor->run(BACKWARD);
       RightMotor->setSpeed(turn_speed);
-      delay(line_find_turn_delay); // turnaround guarantee.k
+      delay(line_find_turn_delay); // turnaround guarantee.
       digitalWrite(RedLED, LOW);
       delay(10);
       digitalWrite(RedLED, HIGH);
@@ -922,10 +853,8 @@ void MovementControl::LineFindTurn(){
       digitalWrite(RedLED, HIGH);
       delay(10);
       LeftMotor->run(FORWARD);
-      //LeftMotor->run(BACKWARD);
       LeftMotor->setSpeed(turn_speed);
       RightMotor->run(BACKWARD);
-      // RightMotor->run(FORWARD);
       RightMotor->setSpeed(turn_speed);
       delay(line_find_turn_delay); // turnaround guarantee.
       digitalWrite(RedLED, LOW);
@@ -1214,7 +1143,7 @@ void MovementControl::Stop(){
 void setup()
 {
   Serial.begin(9600);
-  Serial.println("Testing START!");
+  Serial.println("Program start.");
   AFMS.begin();
 
   for (int i=0;i<intxn_queue_length;i++)
@@ -1248,12 +1177,16 @@ void setup()
 void loop()
 {
 
-    if (main_loop_counter % print_freq == 0){Serial.println("Loop: " + String(main_loop_counter) + " ------------------------");}
+    if (main_loop_counter % print_freq == 0){
+        Serial.println("Loop: " + String(main_loop_counter) + " ------------------------");
+    }
 
     MovementControl MC;
     LFDetection LF;
     ServoMove SM;
 
+    /* Record button presses. If pressed once, robot delivers 1 block only.
+    If pressed twice, robot attempts all 4 blocks. */
     while (button_pressed == 0){
       LeftMotor->run(FORWARD);
       RightMotor->run(FORWARD);
@@ -1273,7 +1206,6 @@ void loop()
 
     MC.FindTask();
     MC.BlinkAmber();
-   // task = 1;
 
     switch ( task ){
         case 0:
@@ -1310,6 +1242,6 @@ void loop()
     delay(main_loop_delay_time);
     main_loop_counter++;
     if (main_loop_counter % print_freq == 0){
-    Serial.println(" ");}
-
+        Serial.println(" ");
+    }
 }
